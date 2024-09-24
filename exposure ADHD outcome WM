@@ -1,0 +1,162 @@
+#install.packages("TwoSampleMR")
+#install.packages("remotes")
+#remotes::install_github("MRCIEU/TwoSampleMR")
+library(TwoSampleMR)
+
+# Two sample Mendelian Randomization 
+
+#Get instruments 
+
+exposure_dat <- read_exposure_data(
+  filename = "adhd_demontis_2022_sig_clumped.csv",
+  sep = ",",
+  snp_col = "SNP",
+  beta_col = "BETA",
+  se_col = "beta_SE",
+  effect_allele_col = "A1",
+  other_allele_col = "A2",
+  eaf_col = "EAF",
+  pval_col = "P",
+  units_col = "",
+  gene_col = "",
+  samplesize_col = "N",)
+
+exposure_dat$exposure <- "ADHD"
+exposure_dat$id.exposure <- "ADHD"
+
+
+
+#Outcome
+outcome_dat <- read_outcome_data(snps = exposure_dat$SNP,
+                                 filename = "summary_whitematter_ACR",
+                                 sep = ",",
+                                 snp_col = "SNP",
+                                 beta_col = "BETA",
+                                 se_col = "SE",
+                                 effect_allele_col = "A1",
+                                 other_allele_col = "A2",
+                                 eaf_col = "AF1",
+                                 pval_col = "P",
+                                 units_col = "",
+                                 gene_col = "",
+                                 samplesize_col = "N",
+)
+
+outcome_dat$outcome <- "ACR_FA"
+outcome_dat$id.outcome <- "ACR_FA"
+
+write.csv(outcome_dat, file="outcome_dat_ADHD2022_ACR.csv", row.names=F)
+
+
+# Harmonise the exposure and outcome data
+dat <- harmonise_data(exposure_dat, outcome_dat)
+dat <- steiger_filtering(dat)
+dat_ADHD2022_ACR <- dat
+
+write.csv(dat_ADHD2022_ACR, file="dat_ADHD2022_ACR.csv", row.names=T)
+
+
+# Perform MR
+res <- mr(dat)
+View(res)
+
+write.csv(res, file="res_ACR_ADHD2022.csv")
+
+
+
+## Directionality test
+
+directionality_test <- directionality_test(dat)
+
+write.csv(directionality_test, file="directionality_test_ACR_adhd.csv", row.names=F)
+
+
+## Heterogeneity test
+
+heterogeneity_test <- mr_heterogeneity(dat)
+
+## i²
+isquared <- (((heterogeneity_test$Q)-(heterogeneity_test$Q_df))/heterogeneity_test$Q)
+heterogeneity_test$isquared <- isquared
+
+write.csv(heterogeneity_test, file="heterogeneity_test_ACR_adhd.csv")
+
+# Calculate F statistics
+# and I-squared statistics
+# to measure Instrument 
+# strength for MR-Egger
+
+dat <- add_rsq(dat)
+
+dat$F <- (((dat$effective_n.exposure-27)-1)/27) * (dat$rsq.exposure/(1-dat$rsq.exposure)) 
+
+exposure_withF <- dat
+write.csv(dat, file="exposure_withrsq.csv")
+
+
+b_exp <- dat$beta.exposure
+b_out <- dat$beta.outcome
+se_exp <- dat$se.exposure
+se_out <- dat$se.outcome
+
+
+## MR-RAPS
+
+#install.packages("mr.raps")
+library(mr.raps)
+
+
+mr_raps_basic <- mr.raps(b_exp, b_out, se_exp, se_out, over.dispersion = TRUE,
+                         loss.function = c("l2", "huber", "tukey"), diagnosis = TRUE,
+                         se.method = c("sandwich", "bootstrap"), k = switch(loss.function[1], l2 =
+                                                                              NULL, huber = 1.345, tukey = 4.685), B = 1000, suppress.warning = FALSE)
+cat(capture.output(print(mr_raps_basic), file="mr_raps_basic_ACR_ADHD.txt"))
+
+#mr_raps_overdispersed <- mr.raps.overdispersed.robust(b_exp, b_out, se_exp, se_out, diagnosis=TRUE)
+#cat(capture.output(print(mr_raps_overdispersed), file="mr_raps_overdispersed_robust_ACR_ADHD.txt"))
+
+
+
+
+#Report
+report_ACR_ADHD_2022 <- mr_report(dat)
+
+# Contamination mixture method
+
+install.packages("MendelianRandomization")
+library(MendelianRandomization)
+
+
+MRInput_ACR <- mr_input(bx = dat$beta.exposure,
+                        bxse = dat$se.exposure,
+                        by = dat$beta.outcome,
+                        byse = dat$se.outcome)
+
+
+mr_conmix_ACR <- mr_conmix(MRInput_ACR, psi = 0, CIMin = NA, CIMax = NA, CIStep = 0.01, alpha = 0.05)
+
+# Exportando o resultado do mr_conmix
+
+# Assuming your S4 object is named 'your_s4_object'
+object_slots <- slotNames(mr_conmix_ACR)
+
+# Create a list to store slot values
+slot_values_list <- list()
+
+# Iterate over the slots and extract values
+for (slot_name in object_slots) {
+  slot_values_list[[slot_name]] <- slot(mr_conmix_ACR, slot_name)
+}
+
+# The resulting 'slot_values_list' will contain the values of each slot
+
+cat(capture.output(print(slot_values_list), file="mr_conmix_ADHD_ACR_steiger.txt"))
+
+
+
+
+
+
+
+
+
