@@ -1,0 +1,213 @@
+library(TwoSampleMR)
+
+## Preparando os arquivos
+
+##clumping
+
+#arquivos summary WM > summary_whitematter_*name of the tract*
+
+#creates archive with only the significant p values
+adhd_demontis_2022_clean_sig <- adhd_demontis_2022_clean [which(adhd_demontis_2022_clean$P<= 0.00000005),]
+write.csv(adhd_demontis_2022_clean_sig, file="adhd_demontis_2022_clean_sig.csv", row.names=F)
+
+#perform LD clump
+adhd_demontis_2022_clean_sig_clumped <- clump_data(adhd_demontis_2022_clean_sig)
+write.csv(summary_whitematter_IFO_sig_clumped, file="summary_whitematter_IFO_sig_clumped.csv", row.names=F)
+
+##calculate beta and SE from OR
+adhd_demontis_2022_clean$BETA <- log(adhd_demontis_2022_clean$OR)
+##sum cases and controls
+adhd_demontis_2022_clean$N <- (adhd_demontis_2022_clean$Nca+adhd_demontis_2022_clean$Nco)
+##calculate the median frequence between cases and controls of the AF1
+adhd_demontis_2022_clean$EAF <- (((adhd_demontis_2022_clean$FRQ_A_38691*adhd_demontis_2022_clean$Nca)+(adhd_demontis_2022_clean$FRQ_U_186843*adhd_demontis_2022_clean$Nco))/adhd_demontis_2022_clean$N)
+##clean archive 
+adhd_demontis_2022_clean <- demontis2022[,+c(1,2,3,4,5,6,7,8,9,10,11,13,14)]
+
+write.csv(adhd_demontis_2022_clean, file="adhd_demontis_2022_clean.csv", row.names=F)
+
+# Two sample Mendelian Randomization 
+
+#Get instruments 
+
+exposure_dat <- read_exposure_data(
+  filename = "summary_whitematter_ACR_sig_clumped.csv",
+  sep = ",",
+  snp_col = "SNP",
+  beta_col = "BETA",
+  se_col = "SE",
+  effect_allele_col = "A1",
+  other_allele_col = "A2",
+  eaf_col = "AF1",
+  pval_col = "P",
+  units_col = "",
+  gene_col = "",
+  samplesize_col = "N",)
+
+exposure_dat$exposure <- "ACR_FA"
+exposure_dat$id.exposure <- "ACR_FA_WM"
+
+
+
+#Outcome
+outcome_dat <- read_outcome_data(snps = exposure_dat$SNP,
+                                 filename = "adhd_demontis_2022_clean.csv",
+                                 sep = ",",
+                                 snp_col = "SNP",
+                                 beta_col = "BETA",
+                                 se_col = "beta_SE",
+                                 effect_allele_col = "A1",
+                                 other_allele_col = "A2",
+                                 eaf_col = "EAF",
+                                 pval_col = "P",
+                                 units_col = "",
+                                 gene_col = "",
+                                 samplesize_col = "N",
+)
+
+outcome_dat$outcome <- "ADHD2022"
+outcome_dat$id.outcome <- "ADHD2022"
+
+write.csv(outcome_dat, file="outcome_dat_ACR_ADHD2022.csv", row.names=F)
+
+
+# Harmonise the exposure and outcome data
+dat <- harmonise_data(exposure_dat, outcome_dat)
+dat <- steiger_filtered_ACR_ADHD22
+
+write.csv(dat_ACR_ADHD2022, file="dat_ACR_ADHD2022.csv", row.names=T)
+
+
+# Perform MR
+res <- mr(dat)
+View(res)
+
+write.csv(res, file="res_ACR_ADHD2022.csv")
+
+
+
+## Directionality test
+
+directionality_test <- directionality_test(dat)
+
+write.csv(directionality_test, file="directionality_test_ACR_adhd.csv", row.names=F)
+
+
+## Heterogeneity test
+
+heterogeneity_test <- mr_heterogeneity(dat)
+
+## i²
+isquared <- (((heterogeneity_test$Q)-(heterogeneity_test$Q_df))/heterogeneity_test$Q)
+heterogeneity_test$isquared <- isquared
+
+write.csv(heterogeneity_test, file="heterogeneity_test_ACR_adhd.csv")
+
+##mean F
+#Rename required columns
+exposure_dat$BetaXG<-exposure_dat$beta.exposure
+exposure_dat$seBetaXG<-exposure_dat$se.exposure
+BetaXG   = exposure_dat$BetaXG
+seBetaXG = exposure_dat$seBetaXG 
+
+# Calculate F statistics
+# and I-squared statistics
+# to measure Instrument 
+# strength for MR-Egger
+
+BXG=abs(BetaXG)
+F   = BXG^2/seBetaXG^2
+mF  = mean(F)
+
+exposure_dat$F <- F
+write.csv(exposure_dat, file="ACR_exposure.csv")
+
+
+##PWM
+
+
+b_exp <- dat$beta.exposure
+b_out <- dat$beta.outcome
+se_exp <- dat$se.exposure
+se_out <- dat$se.outcome
+
+pwm <- mr_penalised_weighted_median(
+  b_exp,
+  b_out,
+  se_exp,
+  se_out,
+  parameters = default_parameters()
+)
+
+write.csv(pwm, file="pwm_ACR_ADHD.csv")
+
+
+## MR-PRESSO
+
+mr_presso <- run_mr_presso(dat, NbDistribution = 1000, SignifThreshold = 0.05)
+
+cat(capture.output(print(mr_presso), file="mr_presso_ACR_ADHD.txt"))
+
+## MR-RAPS
+
+install.packages("mr.raps")
+library(mr.raps)
+
+
+mr_raps_basic <- mr.raps(b_exp, b_out, se_exp, se_out, over.dispersion = TRUE,
+                         loss.function = c("l2", "huber", "tukey"), diagnosis = TRUE,
+                         se.method = c("sandwich", "bootstrap"), k = switch(loss.function[1], l2 =
+                                                                              NULL, huber = 1.345, tukey = 4.685), B = 1000, suppress.warning = FALSE)
+
+mr_raps_overdispersed_robust <- mr.raps.overdispersed.robust(b_exp, b_out, se_exp, se_out, diagnosis = TRUE)
+cat(capture.output(print(mr_raps_basic), file="mr_raps_basic_ACR_ADHD.txt"))
+cat(capture.output(print(mr_raps_overdispersed_robust), file="mr_raps_overdispersed_robust_ACR_ADHD.txt"))
+
+
+#Report
+report_ACR_ADHD_2022 <- mr_report(dat)
+
+
+# Contamination mixture method
+
+install.packages("MendelianRandomization")
+library(MendelianRandomization)
+
+
+MRInput_ACR <- mr_input(bx = dat$beta.exposure,
+                         bxse = dat$se.exposure,
+                         by = dat$beta.outcome,
+                         byse = dat$se.outcome)
+
+
+mr_conmix_ACR <- mr_conmix(MRInput_ACR, psi = 0, CIMin = NA, CIMax = NA, CIStep = 0.01, alpha = 0.05)
+
+# Exportando o resultado do mr_conmix
+
+# Assuming your S4 object is named 'your_s4_object'
+object_slots <- slotNames(mr_conmix_ACR)
+
+# Create a list to store slot values
+slot_values_list <- list()
+
+# Iterate over the slots and extract values
+for (slot_name in object_slots) {
+  slot_values_list[[slot_name]] <- slot(mr_conmix_ACR, slot_name)
+}
+
+# The resulting 'slot_values_list' will contain the values of each slot
+
+cat(capture.output(print(slot_values_list), file="mr_conmix_ACR_ADHD.txt"))
+
+
+# Steiger filtering
+
+steiger_filtering(dat)
+
+dat <- dat[-c(1, 3, 15), ]  # Exclui as linhas 1, 3 e 15
+
+# Perform MR
+res <- mr(dat)
+View(res)
+
+write.csv(res, file="res_ACR_ADHD2022_steigerfiltered.csv")
+
